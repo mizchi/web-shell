@@ -22,6 +22,13 @@ import { WebLinksAddon } from "xterm-addon-web-links";
 import LocalEchoController from "./local-echo/mod";
 import { instantiate } from "asyncify-wasm";
 
+const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
+const parseInput = (line: string) => {
+  return Array.from(
+    line.matchAll(cmdParser),
+    ([, s1, s2, s3]) => s1 ?? s2 ?? s3
+  );
+}
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
@@ -156,7 +163,6 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
     }
   };
 
-  const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
   const preOpens: Record<string, FileSystemDirectoryHandle> = {
     '/sandbox': await navigator.storage.getDirectory()
   };
@@ -264,20 +270,19 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
         await redirectedStdout.close();
       }
     }
-
   }
-  while (true) {
-    let line: string = await localEcho.read(`${pwd}$ `);
+
+  const onRewind = () => {
     localEcho.history.rewind();
     localStorage.setItem(
       'command-history',
       localEcho.history.entries.join('\n')
     );
-    const args = Array.from(
-      line.matchAll(cmdParser),
-      ([, s1, s2, s3]) => s1 ?? s2 ?? s3
-    );
-    console.log("line >", args);
+  }
+  while (true) {
+    const line = await localEcho.read(`${pwd}$ `);
+    onRewind();
+    const args = parseInput(line);
     try {
       if (!args.length) {
         continue;

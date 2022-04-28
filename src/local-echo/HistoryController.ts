@@ -1,9 +1,9 @@
 /**
  * The history controller provides an ring-buffer
  */
- export class HistoryController {
+export class HistoryController {
   size: number;
-  entries: Array<any>;
+  entries: Array<string>;
   cursor: number;
   constructor(size: number) {
     this.size = size;
@@ -14,7 +14,7 @@
   /**
    * Push an entry and maintain ring buffer size
    */
-  push(entry: any) {
+  push(entry: string) {
     // Skip empty entries
     if (entry.trim() === "") return;
     // Skip duplicate entries
