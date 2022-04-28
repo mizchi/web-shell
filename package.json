@@ -8,14 +8,22 @@
     "serve": "vite preview"
   },
   "dependencies": {
+    "@types/wicg-file-system-access": "^2020.9.5",
     "react": "^18.1.0",
-    "react-dom": "^18.1.0"
+    "react-dom": "^18.1.0",
+    "shell-quote": "^1.7.3"
   },
   "devDependencies": {
     "@types/react": "^18.0.8",
     "@types/react-dom": "^18.0.0",
+    "@types/shell-quote": "^1.7.1",
     "@vitejs/plugin-react": "^1.3.1",
+    "asyncify-wasm": "^1.2.1",
+    "local-echo": "github:RReverser/local-echo",
     "typescript": "^4.6.3",
-    "vite": "^2.9.6"
+    "vite": "^2.9.6",
+    "xterm": "^4.18.0",
+    "xterm-addon-fit": "^0.5.0",
+    "xterm-addon-web-links": "^0.5.1"
   }
 }
