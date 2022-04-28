@@ -306,6 +306,8 @@ export default class Bindings {
 
   private _abortSignal: AbortSignal | undefined;
 
+
+  private _getBuffer: () => ArrayBuffer;
   constructor({
     openFiles,
     stdin = { read: () => new Uint8Array() },
@@ -314,6 +316,7 @@ export default class Bindings {
     args = [],
     env = {},
     abortSignal,
+    getBuffer,
   }: {
     openFiles: OpenFiles;
     stdin?: In;
@@ -322,7 +325,9 @@ export default class Bindings {
     args?: string[];
     env?: Record<string, string>;
     abortSignal?: AbortSignal;
+    getBuffer: () => ArrayBuffer;
   }) {
+    this._getBuffer = getBuffer;
     this._openFiles = openFiles;
     this._stdIn = stdin;
     this._stdOut = stdout;
@@ -333,8 +338,6 @@ export default class Bindings {
     );
     this._abortSignal = abortSignal;
   }
-
-  memory: WebAssembly.Memory | undefined;
 
   private _checkAbort() {
     if (this._abortSignal?.aborted) {
@@ -352,13 +355,6 @@ export default class Bindings {
     });
   }
 
-  private _getBuffer() {
-    let { memory } = this;
-    if (!memory) {
-      throw new Error('Memory not yet initialised.');
-    }
-    return memory.buffer;
-  }
 
   private _getFileStat(file: File | undefined, filestatPtr: ptr<filestat_t>) {
     let size = 0n;
@@ -379,7 +375,7 @@ export default class Bindings {
     });
   }
 
-  private getWasiImports() {
+  public getWasiImports() {
     const bindings: Record<string, (...args: any[]) => void | Promise<void>> = {
       fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
         prestat_t.set(this._getBuffer(), prestatPtr, {
@@ -767,23 +763,24 @@ export default class Bindings {
     });
   }
 
-  async run(module: WebAssembly.Module): Promise<number> {
-    let {
-      exports: { _start, memory }
-    } = await instantiate(module, {
-      wasi_snapshot_preview1: this.getWasiImports()
-    }) as any;
-    this.memory = memory;
-    try {
-      await _start();
-      return 0;
-    } catch (err) {
-      if (err instanceof ExitStatus) {
-        return err.statusCode;
-      }
-      throw err;
-    }
-  }
+  // async run(module: WebAssembly.Module, fn: (memory: WebAssembly.Memory) => void): Promise<number> {
+  //   let {
+  //     exports: { _start, memory }
+  //   } = await instantiate(module, {
+  //     wasi_snapshot_preview1: this.getWasiImports()
+  //   }) as any;
+  //   // this.memory = memory;
+  //   fn(memory);
+  //   try {
+  //     await _start();
+  //     return 0;
+  //   } catch (err) {
+  //     if (err instanceof ExitStatus) {
+  //       return err.statusCode;
+  //     }
+  //     throw err;
+  //   }
+  // }
 
   private async _forEachIoVec(
     iovsPtr: ptr<iovec_t>,

@@ -14,12 +14,13 @@
 
 import "xterm/css/xterm.css";
 import type { IDisposable } from 'xterm';
-import Bindings, { OpenFlags, stringOut } from './binding';
+import Bindings, { ExitStatus, OpenFlags, stringOut } from './binding';
 import { FileOrDir, OpenFiles } from './native_fs';
 import { Terminal, } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { WebLinksAddon } from "xterm-addon-web-links";
 import LocalEchoController from "./local-echo/mod";
+import { instantiate } from "asyncify-wasm";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -87,12 +88,20 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
 
   let helpStr = '';
 
-  await new Bindings({
+  let _mem: WebAssembly.Memory;
+  const onGetMemory = (mem: WebAssembly.Memory) => { _mem = mem };
+  const getBuffer = () => {
+    return _mem.buffer;
+  };
+
+  const wasi = new Bindings({
+    getBuffer,
     openFiles: new OpenFiles({}),
     args: ['--help'],
     stdout: stringOut(chunk => (helpStr += chunk))
-  }).run(module);
-
+  }).getWasiImports();
+  
+  await run(module, wasi, onGetMemory);
   commands.push(
     ...helpStr
       .match(/Currently defined functions\/utilities:(.*)/s)![1]
@@ -251,7 +260,13 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
         }
       });
       try {
-        const statusCode = await new Bindings({
+        let _mem: WebAssembly.Memory;
+        const onGetMemory = (mem: WebAssembly.Memory) => { _mem = mem };
+        const getBuffer = () => {
+          return _mem.buffer;
+        };
+        const wasi = new Bindings({
+          getBuffer,
           abortSignal: abortController.signal,
           openFiles,
           stdin,
@@ -262,7 +277,8 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
             RUST_BACKTRACE: '1',
             PWD: pwd
           }
-        }).run(module);
+        }).getWasiImports();
+        const statusCode = await run(module, wasi, onGetMemory);      
         if (statusCode !== 0) {
           term.writeln(`Exit code: ${statusCode}`);
         }
@@ -278,3 +294,22 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
     }
   }
 })();
+
+async function run(module: WebAssembly.Module, wasi: any, fn: (memory: WebAssembly.Memory) => void): Promise<number> {
+  let {
+    exports: { _start, memory }
+  } = await instantiate(module, {
+    wasi_snapshot_preview1: wasi,
+  }) as any;
+  // this.memory = memory;
+  fn(memory);
+  try {
+    await _start();
+    return 0;
+  } catch (err) {
+    if (err instanceof ExitStatus) {
+      return err.statusCode;
+    }
+    throw err;
+  }
+}
