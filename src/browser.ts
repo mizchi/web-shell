@@ -14,7 +14,7 @@
 
 import "xterm/css/xterm.css";
 import type { IDisposable } from 'xterm';
-import Bindings, { ExitStatus, OpenFlags, stringOut } from './binding';
+import { ExitStatus, getWasiImports, OpenFlags, stringOut } from './binding';
 import { FileOrDir, OpenFiles } from './native_fs';
 import { Terminal, } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
@@ -94,12 +94,12 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
     return _mem.buffer;
   };
 
-  const wasi = new Bindings({
+  const wasi = getWasiImports({
     getBuffer,
     openFiles: new OpenFiles({}),
     args: ['--help'],
     stdout: stringOut(chunk => (helpStr += chunk))
-  }).getWasiImports();
+  });
   
   await run(module, wasi, onGetMemory);
   commands.push(
@@ -265,7 +265,8 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
         const getBuffer = () => {
           return _mem.buffer;
         };
-        const wasi = new Bindings({
+
+        const wasi = getWasiImports({
           getBuffer,
           abortSignal: abortController.signal,
           openFiles,
@@ -277,7 +278,7 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
             RUST_BACKTRACE: '1',
             PWD: pwd
           }
-        }).getWasiImports();
+        });
         const statusCode = await run(module, wasi, onGetMemory);      
         if (statusCode !== 0) {
           term.writeln(`Exit code: ${statusCode}`);
