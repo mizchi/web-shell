@@ -32,7 +32,7 @@ class OpenDirectory {
     return this;
   }
 
-  private _currentIter:
+  #currentIter:
     | {
         pos: number;
         reverted: FileSystemHandle | undefined;
@@ -45,9 +45,9 @@ class OpenDirectory {
   ): AsyncIterableIterator<FileSystemHandle> & {
     revert: (handle: FileSystemHandle) => void;
   } {
-    if (this._currentIter?.pos !== start) {
+    if (this.#currentIter?.pos !== start) {
       // We're at incorrect position and will have to skip [start] items.
-      this._currentIter = {
+      this.#currentIter = {
         pos: 0,
         reverted: undefined,
         iter: this._handle.values()
@@ -56,7 +56,7 @@ class OpenDirectory {
       // We are already at correct position, so zero this out.
       start = 0;
     }
-    let currentIter = this._currentIter;
+    let currentIter = this.#currentIter;
     return {
       next: async () => {
         // This is a rare case when the caller tries to start reading directory
@@ -247,7 +247,7 @@ class OpenFile {
   isFile!: true;
 
   public position = 0;
-  private _writer: FileSystemWritableFileStream | undefined = undefined;
+  #writer: FileSystemWritableFileStream | undefined = undefined;
 
   async getFile() {
     // TODO: do we really have to?
@@ -257,8 +257,8 @@ class OpenFile {
 
   private async _getWriter() {
     return (
-      this._writer ||
-      (this._writer = await this._handle.createWritable({
+      this.#writer ||
+      (this.#writer = await this._handle.createWritable({
         keepExistingData: true
       }))
     );
@@ -284,9 +284,9 @@ class OpenFile {
   }
 
   async flush() {
-    if (!this._writer) return;
-    await this._writer.close();
-    this._writer = undefined;
+    if (!this.#writer) return;
+    await this.#writer.close();
+    this.#writer = undefined;
   }
 
   asFile() {
@@ -313,15 +313,15 @@ export const enum FileOrDir {
 export const FIRST_PREOPEN_FD = 3 as fd_t;
 
 export class OpenFiles {
-  private _files = new Map<fd_t, OpenFile | OpenDirectory>();
-  private _nextFd = FIRST_PREOPEN_FD;
+  #files = new Map<fd_t, OpenFile | OpenDirectory>();
+  #nextFd = FIRST_PREOPEN_FD;
   private readonly _firstNonPreopenFd: fd_t;
 
   constructor(preOpen: Record<string, FileSystemDirectoryHandle>) {
-    for (let path in preOpen) {
-      this._add(path, preOpen[path]);
+    for (const path in preOpen) {
+      this.#add(path, preOpen[path]);
     }
-    this._firstNonPreopenFd = this._nextFd;
+    this._firstNonPreopenFd = this.#nextFd;
   }
 
   getPreOpen(fd: fd_t): OpenDirectory {
@@ -332,44 +332,44 @@ export class OpenFiles {
     }
   }
 
-  private _add(path: string, handle: Handle) {
-    this._files.set(
-      this._nextFd,
+  #add(path: string, handle: Handle) {
+    this.#files.set(
+      this.#nextFd,
       handle.kind === 'file'
         ? new OpenFile(path, handle)
         : new OpenDirectory(path, handle)
     );
-    return this._nextFd++ as fd_t;
+    return this.#nextFd++ as fd_t;
   }
 
   async open(preOpen: OpenDirectory, path: string, openFlags?: OpenFlags) {
-    return this._add(
+    return this.#add(
       `${preOpen.path}/${path}`,
       await preOpen.getFileOrDir(path, FileOrDir.Any, openFlags)
     );
   }
 
   get(fd: fd_t) {
-    let openFile = this._files.get(fd);
+    let openFile = this.#files.get(fd);
     if (!openFile) {
       throw new SystemError(E.BADF);
     }
     return openFile;
   }
 
-  private _take(fd: fd_t) {
+  #take(fd: fd_t) {
     let handle = this.get(fd);
-    this._files.delete(fd);
+    this.#files.delete(fd);
     return handle;
   }
 
   async renumber(from: fd_t, to: fd_t) {
     await this.close(to);
-    this._files.set(to, this._take(from));
+    this.#files.set(to, this.#take(from));
   }
 
   async close(fd: fd_t) {
-    await this._take(fd).close();
+    await this.#take(fd).close();
   }
 
   // Translation of the algorithm from __wasilibc_find_relpath.

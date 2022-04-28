@@ -117,7 +117,7 @@ export default class LocalEchoController implements ITerminalAddon {
   /**
    * Register a handler that will be called to satisfy auto-completion
    */
-  addAutocompleteHandler(fn: any, ...args: Array<any>) {
+  addAutocompleteHandler(fn: Function, ...args: Array<string>) {
     this._autocompleteHandlers.push({
       fn,
       args

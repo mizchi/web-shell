@@ -26,9 +26,7 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoController, commands: string[]}> {
-  const term = new Terminal({
-    // fontFamily: '"Fira Code", "Fira Mono", monospace',
-  });
+  const term = new Terminal({});
 
   // weblink
   term.loadAddon(new WebLinksAddon());
@@ -36,28 +34,23 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
   // fit addon
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
-  window.addEventListener("resize", () => {
-    fitAddon.fit();
-  });
-  // local echo
-  let localEcho = new LocalEchoController();
+  window.addEventListener("resize", () => fitAddon.fit());
+  const localEcho = new LocalEchoController();
   const commands = ['help', 'mount', 'cd'];
   localEcho.addAutocompleteHandler((index: number): string[] =>
     index === 0 ? commands : []
   );
-  {
-    let storedHistory = localStorage.getItem('command-history');
-    if (storedHistory) {
-      localEcho.history.entries = storedHistory.split('\n');
-      localEcho.history.rewind();
-    }
+  const storedHistory = localStorage.getItem('command-history');
+  if (storedHistory) {
+    localEcho.history.entries = storedHistory.split('\n');
+    localEcho.history.rewind();
   }
   term.loadAddon(localEcho);
 
   term.open(document.querySelector("#root")!);
   fitAddon.fit();
   return {
-    term: term,
+    term,
     localEcho,
     commands,
   };
@@ -65,9 +58,6 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
 
 (async () => {
   const { term, localEcho, commands } = await setupTerminal();
-
-  // return;
-
   const ANSI_GRAY = '\x1B[38;5;251m';
   const ANSI_BLUE = '\x1B[34;1m';
   const ANSI_RESET = '\x1B[0m';
@@ -93,14 +83,12 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
   const getBuffer = () => {
     return _mem.buffer;
   };
-
   const wasi = getWasiImports({
     getBuffer,
     openFiles: new OpenFiles({}),
     args: ['--help'],
     stdout: stringOut(chunk => (helpStr += chunk))
   });
-  
   await run(module, wasi, onGetMemory);
   commands.push(
     ...helpStr
@@ -169,12 +157,115 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
   };
 
   const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
-
-  const preOpens: Record<string, FileSystemDirectoryHandle> = {};
-  preOpens['/sandbox'] = await navigator.storage.getDirectory();
+  const preOpens: Record<string, FileSystemDirectoryHandle> = {
+    '/sandbox': await navigator.storage.getDirectory()
+  };
 
   let pwd = '/sandbox';
 
+  const handleInput = async (args: string[]) => {
+    switch (args[0]) {
+      case 'help':
+        args[0] = '--help';
+        break;
+      case 'mount': {
+        let dest = args[1];
+        if (!dest || dest === '--help' || !dest.startsWith('/')) {
+          term.writeln(
+            'Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.'
+          );
+          return;
+        }
+        const src = (preOpens[dest] = await showDirectoryPicker());
+        term.writeln(
+          `Successfully mounted (...host path...)/${src.name} at ${dest}.`
+        );
+        pwd = dest;
+        return;
+      }
+      case 'cd': {
+        let dest = args[1];
+        if (dest) {
+          // Resolve against the current working dir.
+          dest = new URL(dest, `file://${pwd}/`).pathname;
+          if (dest.endsWith('/')) {
+            dest = dest.slice(0, -1) || '/';
+          }
+          const openFiles = new OpenFiles(preOpens);
+          const { preOpen, relativePath } = openFiles.findRelPath(dest);
+          await preOpen.getFileOrDir(
+            relativePath,
+            FileOrDir.Dir,
+            OpenFlags.Directory
+          );
+          // We got here without failing, set the new working dir.
+          pwd = dest;
+        } else {
+          term.writeln('Provide the directory argument.');
+        }
+        return;
+      }
+    }
+    const openFiles = new OpenFiles(preOpens);
+    let redirectedStdout;
+    if (['>', '>>'].includes(args[args.length - 2])) {
+      let path = args.pop()!;
+      // Resolve against the current working dir.
+      path = new URL(path, `file://${pwd}/`).pathname;
+      let { preOpen, relativePath } = openFiles.findRelPath(path);
+      let handle = await preOpen.getFileOrDir(
+        relativePath,
+        FileOrDir.File,
+        OpenFlags.Create
+      );
+      if (args.pop() === '>') {
+        redirectedStdout = await handle.createWritable();
+      } else {
+        redirectedStdout = await handle.createWritable({ keepExistingData: true });
+        redirectedStdout.seek((await handle.getFile()).size);
+      }
+    }
+    localEcho.detach();
+    const abortController = new AbortController();
+    const ctrlCHandler = term.onData(s => {
+      if (s === '\x03') {
+        term.write('^C');
+        abortController.abort();
+      }
+    });
+    try {
+      let _mem: WebAssembly.Memory;
+      const onGetMemory = (mem: WebAssembly.Memory) => { _mem = mem };
+      const getBuffer = () => {
+        return _mem.buffer;
+      };
+
+      const wasi = getWasiImports({
+        getBuffer,
+        abortSignal: abortController.signal,
+        openFiles,
+        stdin,
+        stdout: redirectedStdout ?? stdout,
+        stderr: stdout,
+        args: ['$', ...args],
+        env: {
+          RUST_BACKTRACE: '1',
+          PWD: pwd
+        }
+      });
+      const statusCode = await run(module, wasi, onGetMemory);      
+      if (statusCode !== 0) {
+        term.writeln(`Exit code: ${statusCode}`);
+      }
+    } finally {
+      ctrlCHandler.dispose();
+      localEcho.attach();
+      if (redirectedStdout) {
+        await redirectedStdout.close();
+      }
+    }
+
+  }
   while (true) {
     let line: string = await localEcho.read(`${pwd}$ `);
     localEcho.history.rewind();
@@ -191,105 +282,7 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
       if (!args.length) {
         continue;
       }
-      switch (args[0]) {
-        case 'help':
-          args[0] = '--help';
-          break;
-        case 'mount': {
-          let dest = args[1];
-          if (!dest || dest === '--help' || !dest.startsWith('/')) {
-            term.writeln(
-              'Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.'
-            );
-            continue;
-          }
-          let src = (preOpens[dest] = await showDirectoryPicker());
-          term.writeln(
-            `Successfully mounted (...host path...)/${src.name} at ${dest}.`
-          );
-          continue;
-        }
-        case 'cd': {
-          let dest = args[1];
-          if (dest) {
-            // Resolve against the current working dir.
-            dest = new URL(dest, `file://${pwd}/`).pathname;
-            if (dest.endsWith('/')) {
-              dest = dest.slice(0, -1) || '/';
-            }
-            let openFiles = new OpenFiles(preOpens);
-            let { preOpen, relativePath } = openFiles.findRelPath(dest);
-            await preOpen.getFileOrDir(
-              relativePath,
-              FileOrDir.Dir,
-              OpenFlags.Directory
-            );
-            // We got here without failing, set the new working dir.
-            pwd = dest;
-          } else {
-            term.writeln('Provide the directory argument.');
-          }
-          continue;
-        }
-      }
-      let openFiles = new OpenFiles(preOpens);
-      let redirectedStdout;
-      if (['>', '>>'].includes(args[args.length - 2])) {
-        let path = args.pop()!;
-        // Resolve against the current working dir.
-        path = new URL(path, `file://${pwd}/`).pathname;
-        let { preOpen, relativePath } = openFiles.findRelPath(path);
-        let handle = await preOpen.getFileOrDir(
-          relativePath,
-          FileOrDir.File,
-          OpenFlags.Create
-        );
-        if (args.pop() === '>') {
-          redirectedStdout = await handle.createWritable();
-        } else {
-          redirectedStdout = await handle.createWritable({ keepExistingData: true });
-          redirectedStdout.seek((await handle.getFile()).size);
-        }
-      }
-      localEcho.detach();
-      let abortController = new AbortController();
-      let ctrlCHandler = term.onData(s => {
-        if (s === '\x03') {
-          term.write('^C');
-          abortController.abort();
-        }
-      });
-      try {
-        let _mem: WebAssembly.Memory;
-        const onGetMemory = (mem: WebAssembly.Memory) => { _mem = mem };
-        const getBuffer = () => {
-          return _mem.buffer;
-        };
-
-        const wasi = getWasiImports({
-          getBuffer,
-          abortSignal: abortController.signal,
-          openFiles,
-          stdin,
-          stdout: redirectedStdout ?? stdout,
-          stderr: stdout,
-          args: ['$', ...args],
-          env: {
-            RUST_BACKTRACE: '1',
-            PWD: pwd
-          }
-        });
-        const statusCode = await run(module, wasi, onGetMemory);      
-        if (statusCode !== 0) {
-          term.writeln(`Exit code: ${statusCode}`);
-        }
-      } finally {
-        ctrlCHandler.dispose();
-        localEcho.attach();
-        if (redirectedStdout) {
-          await redirectedStdout.close();
-        }
-      }
+      await handleInput(args);
     } catch (err) {
       term.writeln((err as Error).message);
     }
