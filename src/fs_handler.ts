@@ -20,7 +20,7 @@ class OpenDirectory {
   constructor(
     public readonly path: string,
     private readonly _handle: FileSystemDirectoryHandle
-  ) {}
+  ) { }
 
   isFile!: false;
 
@@ -34,10 +34,10 @@ class OpenDirectory {
 
   #currentIter:
     | {
-        pos: number;
-        reverted: FileSystemHandle | undefined;
-        iter: AsyncIterableIterator<FileSystemHandle>;
-      }
+      pos: number;
+      reverted: FileSystemHandle | undefined;
+      iter: AsyncIterableIterator<FileSystemHandle>;
+    }
     | undefined = undefined;
 
   getEntries(
@@ -232,8 +232,9 @@ class OpenDirectory {
     }
     await parent.removeEntry(name);
   }
+  close() { }
 
-  close() {}
+  // isFile = false;
 }
 
 OpenDirectory.prototype.isFile = false;
@@ -242,7 +243,7 @@ class OpenFile {
   constructor(
     public readonly path: string,
     private readonly _handle: FileSystemFileHandle
-  ) {}
+  ) { }
 
   isFile!: true;
 
@@ -315,33 +316,22 @@ export const FIRST_PREOPEN_FD = 3 as fd_t;
 export class OpenFiles {
   #files = new Map<fd_t, OpenFile | OpenDirectory>();
   #nextFd = FIRST_PREOPEN_FD;
-  private readonly _firstNonPreopenFd: fd_t;
+  readonly #firstNonPreopenFd: fd_t;
 
   constructor(preOpen: Record<string, FileSystemDirectoryHandle>) {
     for (const path in preOpen) {
       this.#add(path, preOpen[path]);
     }
-    this._firstNonPreopenFd = this.#nextFd;
+    this.#firstNonPreopenFd = this.#nextFd;
   }
 
   getPreOpen(fd: fd_t): OpenDirectory {
-    if (fd >= FIRST_PREOPEN_FD && fd < this._firstNonPreopenFd) {
+    if (fd >= FIRST_PREOPEN_FD && fd < this.#firstNonPreopenFd) {
       return this.get(fd) as OpenDirectory;
     } else {
       throw new SystemError(E.BADF, true);
     }
   }
-
-  #add(path: string, handle: Handle) {
-    this.#files.set(
-      this.#nextFd,
-      handle.kind === 'file'
-        ? new OpenFile(path, handle)
-        : new OpenDirectory(path, handle)
-    );
-    return this.#nextFd++ as fd_t;
-  }
-
   async open(preOpen: OpenDirectory, path: string, openFlags?: OpenFlags) {
     return this.#add(
       `${preOpen.path}/${path}`,
@@ -357,11 +347,6 @@ export class OpenFiles {
     return openFile;
   }
 
-  #take(fd: fd_t) {
-    let handle = this.get(fd);
-    this.#files.delete(fd);
-    return handle;
-  }
 
   async renumber(from: fd_t, to: fd_t) {
     await this.close(to);
@@ -401,7 +386,7 @@ export class OpenFiles {
     // recently added preopens take precedence over less recently addded ones.
     let matchLen = 0;
     let foundPre;
-    for (let i = this._firstNonPreopenFd - 1; i >= FIRST_PREOPEN_FD; --i) {
+    for (let i = this.#firstNonPreopenFd - 1; i >= FIRST_PREOPEN_FD; --i) {
       let pre = this.get(i as fd_t) as OpenDirectory;
       let prefix = pre.path;
 
@@ -446,5 +431,20 @@ export class OpenFiles {
       preOpen: foundPre,
       relativePath: computed
     };
+  }
+  #add(path: string, handle: Handle) {
+    this.#files.set(
+      this.#nextFd,
+      handle.kind === 'file'
+        ? new OpenFile(path, handle)
+        : new OpenDirectory(path, handle)
+    );
+    return this.#nextFd++ as fd_t;
+  }
+
+  #take(fd: fd_t) {
+    let handle = this.get(fd);
+    this.#files.delete(fd);
+    return handle;
   }
 }

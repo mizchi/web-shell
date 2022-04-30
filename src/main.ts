@@ -1,3 +1,4 @@
+import { StdIn, StdOut } from './binding';
 // Copyright 2020 Google Inc. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,24 +16,30 @@
 import "xterm/css/xterm.css";
 import type { IDisposable } from 'xterm';
 import { ExitStatus, getWasiImports, OpenFlags, stringOut } from './binding';
-import { FileOrDir, OpenFiles } from './native_fs';
+import { FileOrDir, OpenFiles } from './fs_handler';
 import { Terminal, } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { WebLinksAddon } from "xterm-addon-web-links";
-import LocalEchoController from "./local-echo/mod";
+import LocalEchoController from "../local-echo/mod";
 import { instantiate } from "asyncify-wasm";
 
+const ANSI_GRAY = '\x1B[38;5;251m';
+const ANSI_BLUE = '\x1B[34;1m';
+const ANSI_RESET = '\x1B[0m';
+
 const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
+
 const parseInput = (line: string) => {
   return Array.from(
     line.matchAll(cmdParser),
     ([, s1, s2, s3]) => s1 ?? s2 ?? s3
   );
 }
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoController, commands: string[]}> {
+async function setupTerminal(): Promise<{ term: Terminal, localEcho: LocalEchoController }> {
   const term = new Terminal({});
 
   // weblink
@@ -43,7 +50,21 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
   term.loadAddon(fitAddon);
   window.addEventListener("resize", () => fitAddon.fit());
   const localEcho = new LocalEchoController();
-  const commands = ['help', 'mount', 'cd'];
+  const commands = [
+    'help', 'mount', 'cd',
+    'base32', 'base64', 'basename', 'cat', 'cksum', 'comm',
+    'cp', 'csplit', 'cut', 'date', 'df', 'dircolors', 'dirname',
+    'echo', 'env', 'expand', 'expr', 'factor',
+    'false', 'fmt', 'fold', 'hashsum', 'head', 'join',
+    'link', 'ln', 'ls', 'md5sum', 'mkdir', 'mktemp', 'more',
+    'mv', 'nl', 'od', 'paste', 'printenv', 'printf', 'ptx', 'pwd',
+    'readlink', 'realpath', 'relpath', 'rm', 'rmdir', 'seq', 'sha1sum',
+    'sha224sum', 'sha256sum', 'sha3-224sum', 'sha3-256sum', 'sha3-384sum',
+    'sha3-512sum', 'sha384sum', 'sha3sum', 'sha512sum',
+    'shake128sum', 'shake256sum', 'shred', 'shuf', 'sleep', 'sort',
+    'split', 'sum', 'tac', 'tail', 'tee', 'test', 'touch', 'tr',
+    'true', 'truncate', 'tsort', 'unexpand', 'uniq', 'wc', 'yes'
+  ];
   localEcho.addAutocompleteHandler((index: number): string[] =>
     index === 0 ? commands : []
   );
@@ -59,16 +80,11 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
   return {
     term,
     localEcho,
-    commands,
   };
 }
 
-(async () => {
-  const { term, localEcho, commands } = await setupTerminal();
-  const ANSI_GRAY = '\x1B[38;5;251m';
-  const ANSI_BLUE = '\x1B[34;1m';
-  const ANSI_RESET = '\x1B[0m';
-
+async function main() {
+  const { term, localEcho } = await setupTerminal();
   function writeIndented(s: string) {
     term.write(
       s
@@ -82,27 +98,6 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
   // @ts-ignore
   const fetching = fetch(new URL('./coreutils.async.wasm', import.meta.url));
   const module = await WebAssembly.compileStreaming(fetching);
-
-  let helpStr = '';
-
-  let _mem: WebAssembly.Memory;
-  const onGetMemory = (mem: WebAssembly.Memory) => { _mem = mem };
-  const getBuffer = () => {
-    return _mem.buffer;
-  };
-  const wasi = getWasiImports({
-    getBuffer,
-    openFiles: new OpenFiles({}),
-    args: ['--help'],
-    stdout: stringOut(chunk => (helpStr += chunk))
-  });
-  await run(module, wasi, onGetMemory);
-  commands.push(
-    ...helpStr
-      .match(/Currently defined functions\/utilities:(.*)/s)![1]
-      .match(/[\w-]+/g)!
-  );
-
   writeIndented(`
     # Right now you have /sandbox mounted to a persistent sandbox filesystem:
     $ df -a
@@ -115,7 +110,7 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
     $ help
   `);
 
-  const stdin = {
+  const stdin: StdIn = {
     async read() {
       let onData: IDisposable;
       let line = '';
@@ -155,7 +150,7 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
     }
   };
 
-  const stdout = {
+  const stdout: StdOut = {
     write(data: Uint8Array) {
       term.write(
         textDecoder.decode(data, { stream: true }).replaceAll('\n', '\r\n')
@@ -175,7 +170,7 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
         args[0] = '--help';
         break;
       case 'mount': {
-        let dest = args[1];
+        const dest = args[1];
         if (!dest || dest === '--help' || !dest.startsWith('/')) {
           term.writeln(
             'Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.'
@@ -211,65 +206,55 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
         }
         return;
       }
-    }
-    const openFiles = new OpenFiles(preOpens);
-    let redirectedStdout;
-    if (['>', '>>'].includes(args[args.length - 2])) {
-      let path = args.pop()!;
-      // Resolve against the current working dir.
-      path = new URL(path, `file://${pwd}/`).pathname;
-      let { preOpen, relativePath } = openFiles.findRelPath(path);
-      let handle = await preOpen.getFileOrDir(
-        relativePath,
-        FileOrDir.File,
-        OpenFlags.Create
-      );
-      if (args.pop() === '>') {
-        redirectedStdout = await handle.createWritable();
-      } else {
-        redirectedStdout = await handle.createWritable({ keepExistingData: true });
-        redirectedStdout.seek((await handle.getFile()).size);
-      }
-    }
-    localEcho.detach();
-    const abortController = new AbortController();
-    const ctrlCHandler = term.onData(s => {
-      if (s === '\x03') {
-        term.write('^C');
-        abortController.abort();
-      }
-    });
-    try {
-      let _mem: WebAssembly.Memory;
-      const onGetMemory = (mem: WebAssembly.Memory) => { _mem = mem };
-      const getBuffer = () => {
-        return _mem.buffer;
-      };
-
-      const wasi = getWasiImports({
-        getBuffer,
-        abortSignal: abortController.signal,
-        openFiles,
-        stdin,
-        stdout: redirectedStdout ?? stdout,
-        stderr: stdout,
-        args: ['$', ...args],
-        env: {
-          RUST_BACKTRACE: '1',
-          PWD: pwd
+      default: {
+        const openFiles = new OpenFiles(preOpens);
+        let redirectedStdout;
+        if (['>', '>>'].includes(args[args.length - 2])) {
+          let path = args.pop()!;
+          // Resolve against the current working dir.
+          path = new URL(path, `file://${pwd}/`).pathname;
+          let { preOpen, relativePath } = openFiles.findRelPath(path);
+          let handle = await preOpen.getFileOrDir(
+            relativePath,
+            FileOrDir.File,
+            OpenFlags.Create
+          );
+          if (args.pop() === '>') {
+            redirectedStdout = await handle.createWritable();
+          } else {
+            redirectedStdout = await handle.createWritable({ keepExistingData: true });
+            redirectedStdout.seek((await handle.getFile()).size);
+          }
         }
-      });
-      const statusCode = await run(module, wasi, onGetMemory);      
-      if (statusCode !== 0) {
-        term.writeln(`Exit code: ${statusCode}`);
-      }
-    } finally {
-      ctrlCHandler.dispose();
-      localEcho.attach();
-      if (redirectedStdout) {
-        await redirectedStdout.close();
+        localEcho.detach();
+        const abortController = new AbortController();
+        const ctrlCHandler = term.onData(s => {
+          if (s === '\x03') {
+            term.write('^C');
+            abortController.abort();
+          }
+        });
+        try {
+          const statusCode = await runCommand(module, pwd, args, {
+            openFiles,
+            abortSignal: abortController.signal,
+            stdin,
+            stdout,
+            redirectedStdOut: redirectedStdout,
+          });
+          if (statusCode !== 0) {
+            term.writeln(`Exit code: ${statusCode}`);
+          }
+        } finally {
+          ctrlCHandler.dispose();
+          localEcho.attach();
+          if (redirectedStdout) {
+            await redirectedStdout.close();
+          }
+        }
       }
     }
+
   }
 
   const onRewind = () => {
@@ -292,16 +277,43 @@ async function setupTerminal(): Promise<{term: Terminal, localEcho: LocalEchoCon
       term.writeln((err as Error).message);
     }
   }
-})();
+};
 
-async function run(module: WebAssembly.Module, wasi: any, fn: (memory: WebAssembly.Memory) => void): Promise<number> {
-  let {
-    exports: { _start, memory }
-  } = await instantiate(module, {
+async function runCommand(
+  module: WebAssembly.Module,
+  pwd: string,
+  args: string[],
+  { openFiles, abortSignal, stdin, stdout, redirectedStdOut
+  }: {
+    openFiles: OpenFiles,
+    abortSignal: AbortSignal,
+    stdin: StdIn,
+    stdout: StdOut,
+    redirectedStdOut?: StdOut
+  })
+  : Promise<number> {
+  const wasi = getWasiImports({
+    getBuffer: () => memory.buffer,
+    abortSignal,
+    openFiles,
+    stdin,
+    stdout: redirectedStdOut ?? stdout,
+    stderr: stdout,
+    args: ['$', ...args],
+    env: {
+      RUST_BACKTRACE: '1',
+      PWD: pwd
+    }
+  });
+
+  const compiled = await instantiate(module, {
     wasi_snapshot_preview1: wasi,
-  }) as any;
-  // this.memory = memory;
-  fn(memory);
+  });
+
+  const { _start, memory } = compiled.exports as {
+    _start: () => Promise<number>,
+    memory: WebAssembly.Memory
+  };
   try {
     await _start();
     return 0;
@@ -312,3 +324,7 @@ async function run(module: WebAssembly.Module, wasi: any, fn: (memory: WebAssemb
     throw err;
   }
 }
+
+
+main().catch(console.error);
+

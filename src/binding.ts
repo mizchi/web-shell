@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { OpenFiles, FileOrDir, FIRST_PREOPEN_FD } from './native_fs';
-// import { instantiate } from '../node_modules/asyncify-wasm/dist/asyncify.mjs';
-import { instantiate } from 'asyncify-wasm';
-
+import { OpenFiles, FileOrDir, FIRST_PREOPEN_FD } from './fs_handler';
 import {
   enumer,
   ptr,
@@ -31,6 +28,25 @@ import {
   uint64_t,
   size_t
 } from './type_desc';
+
+export type StdIn = {
+  read(len: number): Uint8Array | Promise<Uint8Array>;
+}
+
+export type StdOut = {
+  write(data: Uint8Array): void | Promise<void>;
+}
+export type WasiImportsOptions = {
+  openFiles: OpenFiles;
+  getBuffer: () => ArrayBuffer;
+  abortSignal?: AbortSignal;
+  stdin: StdIn;
+  stdout: StdOut;
+  stderr: StdOut;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
 
 export enum E {
   SUCCESS = 0,
@@ -48,7 +64,7 @@ export enum E {
 }
 
 export class ExitStatus {
-  constructor(public statusCode: number) {}
+  constructor(public statusCode: number) { }
 }
 
 const enum PreOpenType {
@@ -222,27 +238,18 @@ export const enum FdFlags {
   Sync = 1 << 4
 }
 
-interface In {
-  read(len: number): Uint8Array | Promise<Uint8Array>;
-}
+// export const bufferIn = (buffer: Uint8Array): StdIn => {
+//   return {
+//     read: len => {
+//       const chunk = buffer.subarray(0, len);
+//       buffer = buffer.subarray(len);
+//       return chunk;
+//     }
+//   };
+// };
 
-interface Out {
-  write(data: Uint8Array): void | Promise<void>;
-}
-
-export const bufferIn = (buffer: Uint8Array): In => {
-  return {
-    read: len => {
-      let chunk = buffer.subarray(0, len);
-      buffer = buffer.subarray(len);
-      return chunk;
-    }
-  };
-};
-
-export const stringOut = (writeStr: (chunk: string) => void): Out => {
+export const stringOut = (writeStr: (chunk: string) => void): StdOut => {
   let decoder = new TextDecoder();
-
   return {
     write: data => {
       writeStr(decoder.decode(data, { stream: true }));
@@ -250,18 +257,19 @@ export const stringOut = (writeStr: (chunk: string) => void): Out => {
   };
 };
 
-export const lineOut = (writeLn: (chunk: string) => void): Out => {
-  let lineBuf = '';
+// // export 
+// const lineOut = (writeLn: (chunk: string) => void): StdOut => {
+//   let lineBuf = '';
 
-  return stringOut(chunk => {
-    lineBuf += chunk;
-    let lines = lineBuf.split('\n');
-    lineBuf = lines.pop()!;
-    for (let line of lines) {
-      writeLn(line);
-    }
-  });
-};
+//   return stringOut(chunk => {
+//     lineBuf += chunk;
+//     let lines = lineBuf.split('\n');
+//     lineBuf = lines.pop()!;
+//     for (let line of lines) {
+//       writeLn(line);
+//     }
+//   });
+// };
 
 function unimplemented() {
   throw new SystemError(E.NOSYS);
@@ -335,22 +343,15 @@ export function getWasiImports(
   {
     openFiles,
     stdin = { read: () => new Uint8Array() },
-    stdout = lineOut(console.log),
-    stderr = lineOut(console.error),
+    // stdout = lineOut(console.log),
+    // stderr = lineOut(console.error),
+    stdout,
+    stderr,
     args: args_ = [],
     env: env_ = {},
     abortSignal,
     getBuffer,
-  }: {
-    openFiles: OpenFiles;
-    stdin?: In;
-    stdout?: Out;
-    stderr?: Out;
-    args?: string[];
-    env?: Record<string, string>;
-    abortSignal?: AbortSignal;
-    getBuffer: () => ArrayBuffer;
-  }
+  }: WasiImportsOptions
 ) {
   const args = new StringCollection(args_);
   const env = new StringCollection(
@@ -443,7 +444,7 @@ export function getWasiImports(
       iovsLen: number,
       nwrittenPtr: ptr<number>
     ) => {
-      let out: Out;
+      let out: StdOut;
       switch (fd) {
         case 1: {
           out = stdout;
@@ -491,7 +492,7 @@ export function getWasiImports(
           FileOrDir.Dir,
           OpenFlags.Create | OpenFlags.Directory | OpenFlags.Exclusive
         )
-        .then(() => {}),
+        .then(() => { }),
     path_rename: async (
       oldDirFd: fd_t,
       oldPathPtr: ptr<string>,
