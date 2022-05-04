@@ -7,12 +7,15 @@ export type StdIn = {
   read: () => Uint8Array[],
 }
 
-export type Cmd<Args extends string[] = string[]> = (ctx: Context, args: Args) => Promise<number> | number;
+export type EditorApi = {
+  open(filepath: string): void;
+}
+
+export type Cmd<Args extends string[] = string[]> = (ctx: Context, args: Args, flags: string[]) => Promise<number> | number;
 
 export type Context = {
   fs: FileSystem,
-  // cwd: string;
-  // root: FileSystemDirectoryHandle,
+  editor: EditorApi,
   stdout: StdOut,
   stderr: StdOut,
   stdin: StdIn,

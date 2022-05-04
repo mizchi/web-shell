@@ -19,7 +19,9 @@ export const create_context = async (handlers: {
     ...create_std(),
     fs,
     editor,
-    env: {},
+    env: {
+      HOME: '/workspace',
+    },
     cmds: {}
   }
 }

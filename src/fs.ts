@@ -3,11 +3,12 @@ import { HandleExpect, HandleExpectResult } from "./types";
 
 export class FileSystem {
   #root: FileSystemDirectoryHandle;
-  #cwd: string = '/';
+  #cwd: string;
   #caches: Map<string, FileSystemHandleUnion> = new Map();
   #mounts = new Map<string, FileSystemDirectoryHandle>();
-  constructor(root: FileSystemDirectoryHandle) {
+  constructor(root: FileSystemDirectoryHandle, cwd: string = '/') {
     this.#root = root;
+    this.#cwd = cwd;
     this.#caches.set("/", root);
     this.#mounts.set("/workspace", root);
   }
@@ -169,6 +170,16 @@ export class FileSystem {
     if (rel.startsWith("/")) {
       return rel;
     }
+    if (rel.startsWith("~")) {
+      if (rel === '~') {
+        return '/workspace'
+      }
+      if (rel.startsWith('~/')) {
+        return path.resolve('/workspace', rel.slice(2));
+      }
+      throw new Error(`unsupported path: ${rel}`);
+    }
+
     return path.resolve('/', this.#cwd, rel);
   }
 }

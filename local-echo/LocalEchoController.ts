@@ -1,5 +1,7 @@
-import { ITerminalAddon } from "xterm";
+import { parse } from "shell-quote";
+import { ITerminalAddon, Terminal } from "xterm";
 import { HistoryController } from "./HistoryController";
+import { AutoCompleteFunc } from "./types";
 import {
   closestLeftBoundary,
   closestRightBoundary,
@@ -30,41 +32,38 @@ export default class LocalEchoController implements ITerminalAddon {
   public history: HistoryController;
   maxAutocompleteEntries: number;
   _autocompleteHandlers: Array<{
-    fn: Function,
+    fn: AutoCompleteFunc,
     args: Array<any>
-  }>;
-  _active: boolean;
-  _input:string;
-  _cursor: number;
-  _activePrompt: any;
+  }> = [];
+
+  _locked: boolean = false;
+  _active: boolean = false;
+  _input: string = '';
+  _cursor: number = 0;
+  _activePrompt: null | {
+    prompt: string,
+    continuationPrompt: any,
+    resolve: Function,
+    reject: Function
+  } = null;
   _activeCharPrompt: any;
   _termSize: {
     cols: number,
     rows: number,
-  };
-  _disposables: Array<any>;
-
-  constructor(term: any = null, options: any = {}) {
-    this.term = term;
-    this._handleTermData = this.handleTermData.bind(this);
-    this._handleTermResize = this.handleTermResize.bind(this)
-    
-    this.history = new HistoryController(options.historySize || 10);
-    this.maxAutocompleteEntries = options.maxAutocompleteEntries || 100;
-
-    this._autocompleteHandlers = [];
-    this._active = false;
-    this._input = "";
-    this._cursor = 0;
-    this._activePrompt = null;
-    this._activeCharPrompt = null;
-    this._termSize = {
+  } = {
       cols: 0,
       rows: 0,
     };
+  _disposables: Array<any> = [];
 
-    this._disposables = [];
-    
+  constructor(term: any = null, options: any = {}) {
+    this.term = term;
+    this._handleTermData = this.#handleTermData.bind(this);
+    this._handleTermResize = this.#handleTermResize.bind(this)
+
+    this.history = new HistoryController(options.historySize || 10);
+    this.maxAutocompleteEntries = options.maxAutocompleteEntries || 100;
+
     if (term) {
       if (term.loadAddon) term.loadAddon(this);
       else this.attach();
@@ -83,7 +82,7 @@ export default class LocalEchoController implements ITerminalAddon {
   /////////////////////////////////////////////////////////////////////////////
   // User-Facing API
   /////////////////////////////////////////////////////////////////////////////
-  
+
   /**
    *  Detach the controller from the terminal
    */
@@ -96,7 +95,7 @@ export default class LocalEchoController implements ITerminalAddon {
       this._disposables = [];
     }
   }
-  
+
   /**
    * Attach controller to the terminal, handling events
    */
@@ -117,7 +116,7 @@ export default class LocalEchoController implements ITerminalAddon {
   /**
    * Register a handler that will be called to satisfy auto-completion
    */
-  addAutocompleteHandler(fn: Function, ...args: Array<string>) {
+  addAutocompleteHandler(fn: AutoCompleteFunc, ...args: Array<string>) {
     this._autocompleteHandlers.push({
       fn,
       args
@@ -241,7 +240,7 @@ export default class LocalEchoController implements ITerminalAddon {
   /**
    * Apply prompts to the given input
    */
-  applyPrompts(input: string) {
+  #applyPrompts(input: string) {
     const prompt = (this._activePrompt || {}).prompt || "";
     const continuationPrompt =
       (this._activePrompt || {}).continuationPrompt || "";
@@ -253,8 +252,8 @@ export default class LocalEchoController implements ITerminalAddon {
    * Advances the `offset` as required in order to accompany the prompt
    * additions to the input.
    */
-  applyPromptOffset(input: string, offset: number) {
-    const newInput = this.applyPrompts(input.substr(0, offset));
+  #applyPromptOffset(input: string, offset: number) {
+    const newInput = this.#applyPrompts(input.substr(0, offset));
     return newInput.length;
   }
 
@@ -264,14 +263,14 @@ export default class LocalEchoController implements ITerminalAddon {
    * This function will erase all the lines that display the current prompt
    * and move the cursor in the beginning of the first line of the prompt.
    */
-  clearInput() {
-    const currentPrompt = this.applyPrompts(this._input);
+  #clearInput() {
+    const currentPrompt = this.#applyPrompts(this._input);
 
     // Get the overall number of lines to clear
     const allRows = countLines(currentPrompt, this._termSize.cols);
 
     // Get the line we are currently in
-    const promptCursor = this.applyPromptOffset(this._input, this._cursor);
+    const promptCursor = this.#applyPromptOffset(this._input, this._cursor);
     const { col, row } = offsetToColRow(
       currentPrompt,
       promptCursor,
@@ -282,7 +281,6 @@ export default class LocalEchoController implements ITerminalAddon {
     const moveRows = allRows - row - 1;
     for (var i = 0; i < moveRows; ++i) this.term.write("\x1B[E");
 
-    // Clear current input line(s)
     this.term.write("\r\x1B[K");
     for (var i = 1; i < allRows; ++i) this.term.write("\x1B[F\x1B[K");
   }
@@ -293,21 +291,19 @@ export default class LocalEchoController implements ITerminalAddon {
    * This function clears all the lines that the current input occupies and
    * then replaces them with the new input.
    */
-  setInput(newInput: string, clearInput = true) {
+  #setInput(newInput: string, clearInput = true) {
     // Clear current input
-    if (clearInput) this.clearInput();
-
+    if (clearInput) this.#clearInput();
     // Write the new input lines, including the current prompt
-    const newPrompt = this.applyPrompts(newInput);
+    const newPrompt = this.#applyPrompts(newInput);
     this.print(newPrompt);
-
     // Trim cursor overflow
     if (this._cursor > newInput.length) {
       this._cursor = newInput.length;
     }
 
     // Move the cursor to the appropriate row/col
-    const newCursor = this.applyPromptOffset(newInput, this._cursor);
+    const newCursor = this.#applyPromptOffset(newInput, this._cursor);
     const newLines = countLines(newPrompt, this._termSize.cols);
     const { col, row } = offsetToColRow(
       newPrompt,
@@ -332,13 +328,13 @@ export default class LocalEchoController implements ITerminalAddon {
     const cursor = this._cursor;
 
     // Complete input
-    this.setCursor(this._input.length);
+    this.#setCursor(this._input.length);
     this.term.write("\r\n");
 
     // Prepare a function that will resume prompt
     const resume = () => {
       this._cursor = cursor;
-      this.setInput(this._input);
+      this.#setInput(this._input);
     };
 
     // Call the given callback to echo something, and if there is a promise
@@ -357,16 +353,16 @@ export default class LocalEchoController implements ITerminalAddon {
    * This function:
    * - Calculates the previous and current
    */
-  setCursor(newCursor: number) {
+  #setCursor(newCursor: number) {
     if (newCursor < 0) newCursor = 0;
     if (newCursor > this._input.length) newCursor = this._input.length;
 
     // Apply prompt formatting to get the visual status of the display
-    const inputWithPrompt = this.applyPrompts(this._input);
+    const inputWithPrompt = this.#applyPrompts(this._input);
     const inputLines = countLines(inputWithPrompt, this._termSize.cols);
 
     // Estimate previous cursor position
-    const prevPromptOffset = this.applyPromptOffset(this._input, this._cursor);
+    const prevPromptOffset = this.#applyPromptOffset(this._input, this._cursor);
     const { col: prevCol, row: prevRow } = offsetToColRow(
       inputWithPrompt,
       prevPromptOffset,
@@ -374,7 +370,7 @@ export default class LocalEchoController implements ITerminalAddon {
     );
 
     // Estimate next cursor position
-    const newPromptOffset = this.applyPromptOffset(this._input, newCursor);
+    const newPromptOffset = this.#applyPromptOffset(this._input, newCursor);
     const { col: newCol, row: newRow } = offsetToColRow(
       inputWithPrompt,
       newPromptOffset,
@@ -402,47 +398,47 @@ export default class LocalEchoController implements ITerminalAddon {
   /**
    * Move cursor at given direction
    */
-  handleCursorMove(dir: number) {
+  #handleCursorMove(dir: number) {
     if (dir > 0) {
       const num = Math.min(dir, this._input.length - this._cursor);
-      this.setCursor(this._cursor + num);
+      this.#setCursor(this._cursor + num);
     } else if (dir < 0) {
       const num = Math.max(dir, -this._cursor);
-      this.setCursor(this._cursor + num);
+      this.#setCursor(this._cursor + num);
     }
   }
 
   /**
    * Erase a character at cursor location
    */
-  handleCursorErase(backspace: boolean) {
+  #handleCursorErase(backspace: boolean) {
     const { _cursor, _input } = this;
     if (backspace) {
       if (_cursor <= 0) return;
       const newInput = _input.substr(0, _cursor - 1) + _input.substr(_cursor);
-      this.clearInput();
+      this.#clearInput();
       this._cursor -= 1;
-      this.setInput(newInput, false);
+      this.#setInput(newInput, false);
     } else {
       const newInput = _input.substr(0, _cursor) + _input.substr(_cursor + 1);
-      this.setInput(newInput);
+      this.#setInput(newInput);
     }
   }
 
   /**
    * Insert character at cursor location
    */
-  handleCursorInsert(data: string) {
+  #handleCursorInsert(data: string) {
     const { _cursor, _input } = this;
-    const newInput = _input.substr(0, _cursor) + data + _input.substr(_cursor);
+    const newInput = _input.slice(0, _cursor) + data + _input.slice(_cursor);
     this._cursor += data.length;
-    this.setInput(newInput);
+    this.#setInput(newInput);
   }
 
   /**
    * Handle input completion
    */
-  handleReadComplete() {
+  #handleReadComplete() {
     if (this.history) {
       this.history.push(this._input);
     }
@@ -461,17 +457,17 @@ export default class LocalEchoController implements ITerminalAddon {
    * updates the cached terminal size information and then re-renders the
    * input. This leads (most of the times) into a better formatted input.
    */
-  handleTermResize(data: { cols: number; rows: number }) {
+  #handleTermResize(data: { cols: number; rows: number }) {
     const { rows, cols } = data;
-    this.clearInput();
+    this.#clearInput();
     this._termSize = { cols, rows };
-    this.setInput(this._input, false);
+    this.#setInput(this._input, false);
   }
 
   /**
    * Handle terminal input
    */
-  handleTermData(data: string) {
+  #handleTermData(data: string) {
     if (!this._active) return;
 
     // If we have an active character prompt, satisfy it in priority
@@ -485,172 +481,190 @@ export default class LocalEchoController implements ITerminalAddon {
     // If this looks like a pasted input, expand it
     if (data.length > 3 && data.charCodeAt(0) !== 0x1b) {
       const normData = data.replace(/[\r\n]+/g, "\r");
-      Array.from(normData).forEach(c => this.handleData(c));
+      Array.from(normData).forEach(c => this.#handleData(c));
     } else {
-      this.handleData(data);
+      this.#handleData(data);
     }
   }
 
   /**
    * Handle a single piece of information from the terminal.
    */
-  handleData(data: string) {
-    if (!this._active) return;
-    const ord = data.charCodeAt(0);
-    let ofs;
-
-    // Handle ANSI escape sequences
-    if (ord == 0x1b) {
-      switch (data.substr(1)) {
-        case "[A": // Up arrow
-          if (this.history) {
-            let value = this.history.getPrevious();
-            if (value) {
-              this.setInput(value);
-              this.setCursor(value.length);
-            }
-          }
-          break;
-
-        case "[B": // Down arrow
-          if (this.history) {
-            let value = this.history.getNext();
-            if (!value) value = "";
-            this.setInput(value);
-            this.setCursor(value.length);
-          }
-          break;
-
-        case "[D": // Left Arrow
-          this.handleCursorMove(-1);
-          break;
-
-        case "[C": // Right Arrow
-          this.handleCursorMove(1);
-          break;
-
-        case "[3~": // Delete
-          this.handleCursorErase(false);
-          break;
-
-        case "[F": // End
-          this.setCursor(this._input.length);
-          break;
-
-        case "[H": // Home
-          this.setCursor(0);
-          break;
-
-        case "b": // ALT + LEFT
-          ofs = closestLeftBoundary(this._input, this._cursor);
-          if (ofs != null) this.setCursor(ofs);
-          break;
-
-        case "f": // ALT + RIGHT
-          ofs = closestRightBoundary(this._input, this._cursor);
-          if (ofs != null) this.setCursor(ofs);
-          break;
-
-        case "\x7F": // CTRL + BACKSPACE
-          ofs = closestLeftBoundary(this._input, this._cursor);
-          if (ofs != null) {
-            this.setInput(
-              this._input.substr(0, ofs) + this._input.substr(this._cursor)
-            );
-            this.setCursor(ofs);
-          }
-          break;
-      }
-
-      // Handle special characters
-    } else if (ord < 32 || ord === 0x7f) {
-      switch (data) {
-        case "\r": // ENTER
-          if (isIncompleteInput(this._input)) {
-            this.handleCursorInsert("\n");
-          } else {
-            this.handleReadComplete();
-          }
-          break;
-
-        case "\x7F": // BACKSPACE
-          this.handleCursorErase(true);
-          break;
-
-        case "\t": // TAB
-          if (this._autocompleteHandlers.length > 0) {
-            const inputFragment = this._input.substr(0, this._cursor);
-            const hasTailingSpace = hasTailingWhitespace(inputFragment);
-            const candidates = collectAutocompleteCandidates(
-              this._autocompleteHandlers,
-              inputFragment
-            );
-
-            // Sort candidates
-            candidates.sort();
-
-            // Depending on the number of candidates, we are handing them in
-            // a different way.
-            if (candidates.length === 0) {
-              // No candidates? Just add a space if there is none already
-              if (!hasTailingSpace) {
-                this.handleCursorInsert(" ");
+  async #handleData(data: string) {
+    if (this._locked) return;
+    this._locked = true;
+    try {
+      if (!this._active) return;
+      const ord = data.charCodeAt(0);
+      let ofs;
+      // Handle ANSI escape sequences
+      if (ord == 0x1b) {
+        switch (data.slice(1)) {
+          case "[A": // Up arrow
+            if (this.history) {
+              let value = this.history.getPrevious();
+              if (value) {
+                this.#setInput(value);
+                this.#setCursor(value.length);
               }
-            } else if (candidates.length === 1) {
-              // Just a single candidate? Complete
-              const lastToken = getLastToken(inputFragment) as string;
-              this.handleCursorInsert(
-                candidates[0].substr(lastToken.length) + " "
-              );
-            } else if (candidates.length <= this.maxAutocompleteEntries) {
+            }
+            break;
 
-              // search for a shared fragement
-              const sameFragment = getSharedFragment(inputFragment, candidates);
-              
-              // if there's a shared fragement between the candidates
-              // print complete the shared fragment
-              if (sameFragment) {
+          case "[B": // Down arrow
+            if (this.history) {
+              let value = this.history.getNext();
+              if (!value) value = "";
+              this.#setInput(value);
+              this.#setCursor(value.length);
+            }
+            break;
+
+          case "[D": // Left Arrow
+            this.#handleCursorMove(-1);
+            break;
+
+          case "[C": // Right Arrow
+            this.#handleCursorMove(1);
+            break;
+
+          case "[3~": // Delete
+            this.#handleCursorErase(false);
+            break;
+
+          case "[F": // End
+            this.#setCursor(this._input.length);
+            break;
+
+          case "[H": // Home
+            this.#setCursor(0);
+            break;
+
+          case "b": // ALT + LEFT
+            ofs = closestLeftBoundary(this._input, this._cursor);
+            if (ofs != null) this.#setCursor(ofs);
+            break;
+
+          case "f": // ALT + RIGHT
+            ofs = closestRightBoundary(this._input, this._cursor);
+            if (ofs != null) this.#setCursor(ofs);
+            break;
+
+          case "\x7F": // CTRL + BACKSPACE
+            ofs = closestLeftBoundary(this._input, this._cursor);
+            if (ofs != null) {
+              this.#setInput(
+                this._input.substr(0, ofs) + this._input.substr(this._cursor)
+              );
+              this.#setCursor(ofs);
+            }
+            break;
+        }
+
+        // Handle special characters
+      } else if (ord < 32 || ord === 0x7f) {
+        console.log('data', ord, encodeURIComponent(data));
+        switch (data) {
+          case "\r": {
+            // ENTER 
+            if (isIncompleteInput(this._input)) {
+              this.#handleCursorInsert("\n");
+            } else {
+              this.#handleReadComplete();
+            }
+            break;
+          }
+
+          case "\x7F": // BACKSPACE
+            this.#handleCursorErase(true);
+            break;
+
+          case "\t": { // TAB
+            if (this._autocompleteHandlers.length > 0) {
+              const inputFragment = this._input.slice(0, this._cursor);
+              // debugger
+              const hasTailingSpace = hasTailingWhitespace(inputFragment);
+              const results = await Promise.all(this._autocompleteHandlers.map(async ({ fn, args }) => {
+                const ret = await fn({ args, raw: this._input, cursor: this._cursor });
+                return ret ? ret : [];
+              }));
+              // Filter only the ones starting with the expression
+              const candidates = results.flat();
+              candidates.sort();
+              // Depending on the number of candidates, we are handing them in
+              // a different way.
+              if (candidates.length === 0) {
+                // No candidates? Just add a space if there is none already
+                if (!hasTailingSpace) {
+                  this.#handleCursorInsert("");
+                }
+              } else if (candidates.length === 1) {
+                // Just a single candidate? Complete
                 const lastToken = getLastToken(inputFragment) as string;
-                this.handleCursorInsert(
-                  sameFragment.substr(lastToken.length)
+                this.#handleCursorInsert(
+                  candidates[0].substring(lastToken.length)
+                );
+              } else if (candidates.length <= this.maxAutocompleteEntries) {
+                // search for a shared fragement
+                const sameFragment = getSharedFragment(inputFragment, candidates);
+                // if there's a shared fragement between the candidates
+                // print complete the shared fragment
+                if (sameFragment) {
+                  const lastToken = getLastToken(inputFragment) as string;
+                  this.#handleCursorInsert(
+                    sameFragment.substr(lastToken.length)
+                  );
+                }
+
+                // If we are less than maximum auto-complete candidates, print
+                // them to the user and re-start prompt
+                this.printAndRestartPrompt(() => {
+                  this.printWide(candidates);
+                });
+              } else {
+                // If we have more than maximum auto-complete candidates, print
+                // them only if the user acknowledges a warning
+                this.printAndRestartPrompt(() =>
+                  this.readChar(
+                    `Display all ${candidates.length} possibilities? (y or n)`
+                  ).then(yn => {
+                    if (yn == "y" || yn == "Y") {
+                      this.printWide(candidates);
+                    }
+                  })
                 );
               }
-
-              // If we are less than maximum auto-complete candidates, print
-              // them to the user and re-start prompt
-              this.printAndRestartPrompt(() => {
-                this.printWide(candidates);
-              });
             } else {
-              // If we have more than maximum auto-complete candidates, print
-              // them only if the user acknowledges a warning
-              this.printAndRestartPrompt(() =>
-                this.readChar(
-                  `Display all ${candidates.length} possibilities? (y or n)`
-                ).then(yn => {
-                  if (yn == "y" || yn == "Y") {
-                    this.printWide(candidates);
-                  }
-                })
-              );
+              this.#handleCursorInsert("    ");
             }
-          } else {
-            this.handleCursorInsert("    ");
+            break;
           }
-          break;
+          // Ctrl-A
+          case "\x01": {
+            ofs = 0;
+            this.#setCursor(ofs);
+            break;
+          }
+          // Ctrl-E
+          case "\x05": {
+            ofs = this._input.length;
+            this.#setCursor(ofs);
+            break;
+          }
+          case "\x03": // CTRL+C
+            this.#setCursor(this._input.length);
+            this.term.write("^C\r\n" + ((this._activePrompt || {}).prompt || ""));
+            this._input = "";
+            this._cursor = 0;
+            if (this.history) this.history.rewind();
+            break;
+        }
 
-        case "\x03": // CTRL+C
-          this.setCursor(this._input.length);
-          this.term.write("^C\r\n" + ((this._activePrompt || {}).prompt || ""));
-          this._input = "";
-          this._cursor = 0;
-          if (this.history) this.history.rewind();
-          break;
+        // Handle visible characters
+      } else {
+        this.#handleCursorInsert(data);
       }
-
-      // Handle visible characters
-    } else {
-      this.handleCursorInsert(data);
+    } finally {
+      this._locked = false;
     }
   }
 }

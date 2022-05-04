@@ -3,15 +3,15 @@ import { bundle } from './bundle';
 // import { parse_rel, _read, resolve_parent, resolve_path, resolve_rel_handler } from './fs';
 // import { FileSystem } from './fs';
 
-import { Context } from "./types";
-
-export type Cmd<Args extends string[] = string[]> = (ctx: Context, args: Args) => Promise<number> | number;
+import { Cmd, Context } from "./types";
 
 export const init_default_cmds = (ctx: Context) => {
   const defaluts: Record<string, Cmd> = {
     cd: $cd,
+    "..": $cd_dotdot,
     mkdir: $mkdir,
     touch: $touch,
+
     rm: $rm,
     rmdir: $rmdir,
     echo: $echo,
@@ -95,19 +95,28 @@ export const $mkdir: Cmd = async ({ fs }, args) => {
   return 0;
 }
 
-export const $rmdir: Cmd = async ({ fs }, args) => {
+export const $rmdir: Cmd = async ({ fs }, args, flags) => {
   const target = args[0];
   if (target == null) return 1;
   await fs.rmdir(target);
   return 0;
 }
 
+export const $cd_dotdot: Cmd = async ({ fs }, args) => {
+  fs.chdir("..");
+  return 0;
+}
+
 export const $cd: Cmd = async ({ fs }, args) => {
   const target = args[0];
   if (target == null) {
-    fs.chdir("/");
+    fs.chdir("~");
     return 0;
   };
+  const handle = await fs.read(target);
+  if (handle.kind === 'file') {
+    throw new Error(`${target} is not a directory`);
+  }
   fs.chdir(target);
   return 0;
 }
@@ -119,15 +128,19 @@ export const $touch: Cmd = async ({ fs }, args) => {
   if (exists) {
     return 0;
   } else {
-    fs.writeFile(target, "");
+    await fs.writeFile(target, "");
     return 0;
   }
 }
 
-export const $rm: Cmd = async ({ fs }, args) => {
+export const $rm: Cmd = async ({ fs }, args, flags) => {
   const target = args[0];
   if (target == null) return 1;
-  await fs.rm(target);
+  if (flags.includes('-r')) {
+    await fs.rmdir(target);
+  } else {
+    await fs.rm(target);
+  }
   return 0;
 }
 

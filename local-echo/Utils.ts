@@ -1,4 +1,5 @@
 import { parse } from "shell-quote";
+import { AutoCompleteFunc } from "./types";
 
 /**
  * Detects all the word boundaries on the given input
@@ -132,7 +133,7 @@ export function getLastToken(input: string) {
 /**
  * Returns the auto-complete candidates for the given input
  */
-export function collectAutocompleteCandidates(callbacks: Array<{fn: Function, args: Array<any> }>, input: string) {
+export async function collectAutocompleteCandidates(callbacks: Array<{ fn: AutoCompleteFunc, args: Array<any> }>, input: string) {
   const tokens = parse(input);
   let index = tokens.length - 1;
   let expr = tokens[index] || "";
@@ -147,18 +148,12 @@ export function collectAutocompleteCandidates(callbacks: Array<{fn: Function, ar
     expr = "";
   }
 
-  // Collect all auto-complete candidates from the callbacks
-  const all: string[] = callbacks.reduce((candidates, { fn, args }: any) => {
-    try {
-      return candidates.concat(fn(index, tokens, ...args));
-    } catch (e) {
-      console.error("Auto-complete error:", e);
-      return candidates;
-    }
-  }, []);
-
+  const results = await Promise.all(callbacks.map(async ({ fn, args }) => {
+    const ret = await fn({ index, args, raw: input, expr: expr as string });
+    return ret ? ret : [];
+  }));
   // Filter only the ones starting with the expression
-  return all.filter(txt => txt.startsWith(expr as string));
+  return results.flat().filter(txt => txt.startsWith(expr as string));
 }
 
 
@@ -166,14 +161,14 @@ export function getSharedFragment(fragment: string, candidates: Array<any>): str
 
   // end loop when fragment length = first candidate length
   if (fragment.length >= candidates[0].length) return fragment;
-  
+
   // save old fragemnt
   const oldFragment = fragment;
-  
-  // get new fragment
-  fragment += candidates[0].slice(fragment.length, fragment.length+1);
 
-  for (let i=0; i<candidates.length; i++ ) {
+  // get new fragment
+  fragment += candidates[0].slice(fragment.length, fragment.length + 1);
+
+  for (let i = 0; i < candidates.length; i++) {
 
     // return null when there's a wrong candidate
     if (!candidates[i].startsWith(oldFragment)) return null;

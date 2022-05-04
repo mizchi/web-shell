@@ -28,7 +28,7 @@ export function App() {
   }, []);
   if (ctx == null) return <div></div>;
   return <div style={{ display: 'flex', width: '99vw', height: '100vw' }}>
-    <div style={{ flex: 1, height: '100%' }}>
+    <div style={{ flex: 1, height: '100vh', maxWidth: '50vw' }}>
       <Suspense fallback={<div></div>}>
         <Editor filepath={state.filepath} ctx={ctx} />
       </Suspense>
