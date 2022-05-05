@@ -130,33 +130,6 @@ export function getLastToken(input: string) {
   return tokens.pop() || "";
 }
 
-/**
- * Returns the auto-complete candidates for the given input
- */
-export async function collectAutocompleteCandidates(callbacks: Array<{ fn: AutoCompleteFunc, args: Array<any> }>, input: string) {
-  const tokens = parse(input);
-  let index = tokens.length - 1;
-  let expr = tokens[index] || "";
-
-  // Empty expressions
-  if (input.trim() === "") {
-    index = 0;
-    expr = "";
-  } else if (hasTailingWhitespace(input)) {
-    // Expressions with danging space
-    index += 1;
-    expr = "";
-  }
-
-  const results = await Promise.all(callbacks.map(async ({ fn, args }) => {
-    const ret = await fn({ index, args, raw: input, expr: expr as string });
-    return ret ? ret : [];
-  }));
-  // Filter only the ones starting with the expression
-  return results.flat().filter(txt => txt.startsWith(expr as string));
-}
-
-
 export function getSharedFragment(fragment: string, candidates: Array<any>): string | null {
 
   // end loop when fragment length = first candidate length

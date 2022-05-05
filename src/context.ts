@@ -1,24 +1,16 @@
-import type { Terminal } from "xterm";
 import type { Context, EditorApi, StdIn, StdOut } from "./types";
 import { FileSystem } from "./fs";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-export const create_context = async (handlers: {
-  onOpen(filpath: string): void;
-}): Promise<Context> => {
+export const create_context = async (actions: EditorApi): Promise<Context> => {
   const root = await navigator.storage.getDirectory();
   const fs = new FileSystem(root);
-  const editor: EditorApi = {
-    open: async (filepath: string) => {
-      handlers.onOpen(filepath);
-    }
-  };
   return {
     ...create_std(),
+    actions,
     fs,
-    editor,
     env: {
       HOME: '/workspace',
     },

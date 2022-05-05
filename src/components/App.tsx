@@ -1,36 +1,44 @@
 import { Suspense, useEffect, useState } from "react";
 import { lazy } from "react";
 import { create_context } from "../context";
-import { Context } from "../types";
+import { EditorApi } from "../types";
+import { Provider, useTrackedState, useUpdate } from "./AppContext";
 
 const Terminal = lazy(() => import("./Terminal"));
 const Editor = lazy(() => import("./Editor"));
 
 export function App() {
-  const [state, setState] = useState({
-    filepath: "/workspace/README.md",
-  });
-  const [ctx, setCtx] = useState<null | Context>(null);
+  return <Provider>
+    <AppLoader />
+  </Provider>
+}
 
-  const handlers = {
-    onOpen(filepath: string) {
-      setState({ ...state, filepath });
-    }
-  }
-
+function AppLoader() {
+  const [loaded, setLoaded] = useState(false);
+  const setState = useUpdate();
   useEffect(() => {
-    (async () => {
-      if (ctx == null) {
-        const ctx = await create_context(handlers);
-        setCtx(ctx);
+    const actions: EditorApi = {
+      open(filepath: string) {
+        setState((state) => ({ ...state, filepath }));
       }
+    };
+    (async () => {
+      const ctx = await create_context(actions);
+      setState((state) => ({ ...state, ctx }));
+      setLoaded(true);
     })();
   }, []);
-  if (ctx == null) return <div></div>;
+  if (!loaded) return <div></div>;
+  return <AppImpl />
+}
+
+function AppImpl() {
+  const { filepath, ctx } = useTrackedState();
+  console.log("AppImple", filepath);
   return <div style={{ display: 'flex', width: '99vw', height: '100vw' }}>
     <div style={{ flex: 1, height: '100vh', maxWidth: '50vw' }}>
       <Suspense fallback={<div></div>}>
-        <Editor filepath={state.filepath} ctx={ctx} />
+        <Editor filepath={filepath} ctx={ctx} />
       </Suspense>
     </div>
     <div style={{ flex: 1, width: '50vw', height: '100%' }}>

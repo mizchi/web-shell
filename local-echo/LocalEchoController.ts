@@ -1,11 +1,9 @@
-import { parse } from "shell-quote";
 import { ITerminalAddon, Terminal } from "xterm";
 import { HistoryController } from "./HistoryController";
 import { AutoCompleteFunc } from "./types";
 import {
   closestLeftBoundary,
   closestRightBoundary,
-  collectAutocompleteCandidates,
   countLines,
   getLastToken,
   hasTailingWhitespace,

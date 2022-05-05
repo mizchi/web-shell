@@ -1,16 +1,24 @@
 # Welcom to WebShell
 
-Edit files on Browser. (only for GoogleChrome)
+Edit files on Browser PoC. (only for GoogleChrome)
+
+If you find any errors, please let me know!
+
+https://twitter.com/mizchi
 
 ## How to use
 
-Focus terminal and run commands.
+Focus terminal(`Ctrl-2`) and run commands.
 
 ```sh
 # demo bundle on temporal storage
 /workspace
+# run
+$ exec main.ts
+# bundle to ./dist
 $ bundle main.ts
 gen > /workspace/dist/main.js
+
 $ mount
 # choose your local directory
 # ...now I choose fs-test directory
@@ -19,6 +27,7 @@ $ mount
 $ touch test
 $ ls
 test
+
 # open file on left editor(here)
 $ open main.ts
 # edit and (Ctrl or Cmd)+S
@@ -31,6 +40,14 @@ $ bundle main.ts
 
 CAUTION: `/workspace` is a temporal storage. Sometimes browsers remove this.
 
+## Shortcut Keys
+
+- `Ctrl-1`: focus editr
+- `Ctrl-2`: focus terminal
+- `Ctrl-L`: clear terminal log
+- Mac: `Cmd-S`: Save current editing file
+- Win: `Ctrl-S`: ↑
+
 ## Special command
 
 - `mount`: Choose your local file and mount
@@ -39,15 +56,17 @@ CAUTION: `/workspace` is a temporal storage. Sometimes browsers remove this.
 
 ## UnixLike Commands
 
-- [x] cmd: cd
-- [x] cmd: mkdir
+- [x] cmd: cd `<dest>`
+- [x] cmd: mkdir `<dirname>`
 - [x] cmd: touch
 - [x] cmd: rm
-- [x] cmd: rmdir (now it works as `rm -r`)
+- [x] cmd: rmdir
 - [x] cmd: echo
 - [x] cmd: ls
-- [x] cmd: cp
-- [x] cmd: cat
+- [x] cmd: cp `<from>` `<to>`
+- [x] cmd: cat `<file>`
+- [x] cmd: exec `<file>`
+- [x] cmd: eval `<code>`
 - [x] cmd: bundle `<path>`: generate `dist/...`
 - [x] op: pipeline `|>` example. `echo myfile |> touch`
 - [x] op: `&&`

@@ -15,10 +15,10 @@ export type Cmd<Args extends string[] = string[]> = (ctx: Context, args: Args, f
 
 export type Context = {
   fs: FileSystem,
-  editor: EditorApi,
   stdout: StdOut,
   stderr: StdOut,
   stdin: StdIn,
+  actions: EditorApi,
   // caches: Map<string, FileSystemHandleUnion>,
   env: {
     [key: string]: string;
